@@ -1,0 +1,209 @@
+---
+title: |
+  ![](logo.png){width=30%}\
+  \
+  Candlestick Pattern Backtest - Engulfing Patterns
+subtitle: Do candlestick patterns really work?
+author: Bashar Ul Fattah
+format:
+  html:
+    theme: darkly
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .qmd
+      format_name: quarto
+      format_version: '1.0'
+      jupytext_version: 1.16.2
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+## Candlestick Patterns 
+When first looking into trading, I saw that everyone was talking about [candlestick patterns](https://www.investopedia.com/articles/active-trading/092315/5-most-powerful-candlestick-patterns.asp). However, I could never wrap my head around how certain patterns could predict the direction of price. To me, it always seemed like astrology. You can't just look at the formation of stars and say that something will happen in the future.
+
+While candlestick patterns do depict the price action in that time frame, the data can't be sufficient enough to go off of, right? The best way to see it for ourselves would be to backtest it.
+
+So, that's what I'm going to do in this blog. I'll test it out on a year worth of data.
+
+Now, there are dozens of these patterns, and testing every single one of them would be beyond the scope of this blog. Instead, I've decided to test out only one kind of such pattern. The **"Engulfing Patterns"**. Mostly because these are quite popular and farnkly the easiest to explain.
+
+:::{.callout-important}
+This blog is for informational purposes only and not for any kind of financial advice.
+:::
+
+## Engulfing Candlestick Patterns
+The engulfing pattern consists of two candles. One is of the opposite kind of the other. The engulfing pattern is formed when the second candle's body completely engulfs the preceding candle's body. Thus the name "engulfing".
+
+We have two kinds of engulfing patterns. The bullish engulfing pattern and the bearish engulfing pattern. Each supposedly predicts a reversal in their respective directions.
+
+::: {#fig-engulfing-patterns layout-ncol=2}
+
+![Bullish Engulfing Pattern](bullish-engulfing.png){#fig-bullish-engulfing}
+
+![Bearish Engulfing Pattern](bearish-engulfing.png){#fig-bearish-engulfing}
+
+Engulfing Patterns
+:::
+
+Bullish Engulfing Pattern
+: A bullish engulfing pattern is one where the first candle is bearish and the second candle opens lower than the first candle's close but closes higher than the first candle's open.
+
+Bearish Engulfing Pattern
+: A bearish engulfing pattern is one where the first candle is bullish and the second candle opens higher than the first candle's close but closes lower than the first candle's open.
+
+The rationale is that when a bullish engulfing pattern appears, the price is supposed to go up, and when a bearish engulfing pattern appears, the price is supposed to go down.
+
+## Backtest
+Now let's get into the testing part. As mentioned before, I want to test it on a year worth of data.
+For this, I'll use [OHLCV](https://en.wikipedia.org/wiki/Open-high-low-close_chart) data from `2023-05-25` to `2024-05-25` of stocks listed on [DSE](https://en.wikipedia.org/wiki/Dhaka_Stock_Exchange).
+
+Let's import the required packages and the data.
+
+```{python}
+import pandas as pd
+import numpy as np
+import vectorbt as vbt
+import re
+import warnings
+
+warnings.simplefilter("ignore")
+
+vbt.settings.plotting["layout"]["template"] = "vbt_dark"
+vbt.settings.portfolio["size_granularity"] = 1
+vbt.settings.portfolio["freq"] = "D"
+```
+
+```{python}
+# Dataframe containing the data
+df = pd.read_pickle('dse-all-securities-2023-05-25-to-2024-05-25.pkl')
+df.head()
+```
+
+Not all symbols in this data frame have data from the start date to the end date, as they might have been listed on the exchange much more recently.
+We will keep them, as it keeps the timeline more accurate for a broad test.
+However, the data frame doesn't only contain data on stocks but also T-bills, bonds and mutual funds.
+
+```{python}
+cols = df.columns.get_level_values(0)
+unwanted_cols = [col for col in cols if
+                 "BOND" in col or
+                 "MF" in col or
+                 re.search(r'TB\d+', col)]
+
+print(f'For example: {[unwanted_cols[1], unwanted_cols[200], unwanted_cols[400]]}')
+```
+
+We don't want them in our test. Let's see how many of these need to be removed.
+
+```{python}
+print(f'Total symbols: {len(set(cols))}')
+print(f'Number of unwanted symbols: {len(set(unwanted_cols))}')
+```
+
+Let's get rid of the columns. And hopefully, this will remove all the non stock symbols. Even if one or two are left, that shouldn't impact our test significantly.
+
+```{python}
+stock_data = df.drop(unwanted_cols, axis=1)
+```
+
+This is how the new dataframe looks.
+
+```{python}
+stock_data.head()
+```
+
+To define the logic for the backtest we will need the Open and Close columns. For this we will create two separate dataframes containing Open and Close prices.
+
+```{python}
+def split_open_close(df):
+    open_mask = df.columns.get_level_values(1) == 'Open'
+    close_mask = df.columns.get_level_values(1) == 'Close'
+
+    open_prices = df.loc[:, open_mask]
+    open_prices.columns = open_prices.columns.get_level_values(0)
+    
+    close_prices = df.loc[:, close_mask]
+    close_prices.columns = close_prices.columns.get_level_values(0)
+
+    return open_prices, close_prices
+
+open_prices, close_prices = split_open_close(stock_data)
+```
+
+This is how the Open and Close price dataframes look.
+
+```{python}
+open_prices.head(2)
+```
+
+```{python}
+close_prices.head(2)
+```
+
+It's time to define the logic and create the entries and exits. The entries will be when there's a bullish engulfing pattern, and the exits will be when there's a bearish one.
+We won't go the usual route of going short once there's a bearish signal. As short selling isn't possible in DSE.
+
+```{python}
+entries = (open_prices.shift() > close_prices.shift()) &\
+          (open_prices < close_prices.shift()) &\
+          (close_prices > open_prices.shift())
+
+exits = (close_prices.shift() > open_prices.shift()) &\
+        (open_prices > close_prices.shift()) &\
+        (close_prices < open_prices.shift())
+
+entries = entries.vbt.fshift()
+exits = exits.vbt.fshift()
+```
+
+The entries and exits are defined exactly as explained before. Two opposite candles. The second one's body completely engulfs the first one's. Also, the entries and exits are shifted forward by one candle to account for look-forward bias.
+
+Now we will run the test. For this, I'm using a package called [vectorbt](https://github.com/polakowo/vectorbt). This will let us test the whole thing way more efficiently.
+There is an option to set the commission rate, but I will not set one. Because, we want to see the performance without the effect of settlement delay and commissions. As for the initial capital, I'll set it to BDT 100k just for the sake of it.
+
+:::{.callout-note}
+DSE has a T+2 day settlement period for A and B category stocks and a T+3 day settlement period for N and Z category stocks. That aspect will not be simulated in this particular test.
+:::
+
+```{python}
+pf = vbt.Portfolio.from_signals(close_prices, entries, exits, init_cash=100_000)
+```
+
+## Results
+Let's look at the results. First, let's look at the overall performance across all stocks. The stats will be aggregated by taking the average across all stocks.
+
+```{python}
+pf.stats(metrics=["start_value", "end_value",
+                 "total_return", "benchmark_return",
+                 "max_dd", "win_rate",
+                 "avg_winning_trade", "avg_losing_trade"])
+```
+
+The `-3.4%` return does look good compared with the buy & hold return of `-14.18%`. But it's still in the negative. The win rate of 27% isn't that compelling either. Because the difference between the average winning trade and the average losing trade isn't significant enough.
+
+Anyway, let's see how the distribution of the returns looks like.
+
+```{python}
+#| fig-cap: Distribution of returns
+#| fig-align: center
+pf.total_return().vbt.histplot().show()
+```
+
+As we can see, most of the stocks have a negative return. However, there's an outlier, "KBPPWBIL" sitting far right on the chart at `381.5%`. Let's have a better look at its stats.
+
+```{python}
+pf.stats(column=("KBPPWBIL"))
+```
+
+Just looking at the 381.5% return would be a bad idea. Because this particular stock, "KBPPWBIL" somehow has a buy & hold return of 13x!! Taking that into consideration, 381.5% is actually quite a bad performance. Not to mention, this specific stock is way out of the norm.
+
+Here's the plot of the trades and the equity curve:
+
+```{python}
+pf.plot(column=("KBPPWBIL"), subplots=["trades", "cum_returns"]).show()
+```
+
+I will not draw any conclusions as to whether or not the candlestick patterns work or not. That would require much, much more thorough research. But this specific pattern doesn't seem to be performing all too well on this set of data.
