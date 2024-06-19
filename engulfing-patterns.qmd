@@ -34,6 +34,8 @@ Now, there are dozens of these patterns, and testing every single one of them wo
 This blog is for informational purposes only and not for any kind of financial advice.
 :::
 
+Github Repo: <https://github.com/Zentropic/engulfing-patterns-test>
+
 ## Engulfing Candlestick Patterns
 The engulfing pattern consists of two candles. One is of the opposite kind of the other. The engulfing pattern is formed when the second candle's body completely engulfs the preceding candle's body. Thus the name "engulfing".
 
